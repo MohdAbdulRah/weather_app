@@ -1,0 +1,192 @@
+<!-- templates/index.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Weather App (Tech Assessment)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Roboto, Arial; max-width: 900px; margin: 24px auto; padding: 0 12px; }
+    input, button { padding: 8px; margin: 6px 0; }
+    .card { border: 1px solid #ddd; padding: 12px; margin: 12px 0; border-radius: 6px; }
+    .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .weather-icon { width:48px; height:48px; vertical-align:middle; }
+    iframe { border:0; }
+  </style>
+</head>
+<body>
+  <h1>Weather App — Tech Assessment</h1>
+  <p>Built by: <strong>Mohd Abdul Rahman</strong></p>
+  <button id="infoBtn">Info — Product Manager Accelerator</button>
+
+  <div class="card">
+    <div>
+      <label>Location (city / zip / "lat,lon")</label><br>
+      <input id="loc" placeholder="e.g., New York or 10001 or 40.7128,-74.0060" style="width:70%" />
+      <button id="useLoc">Use My Current Location</button>
+    </div>
+    <div style="margin-top:8px;">
+      <label>Start date (optional)</label><br>
+      <input id="start" type="date" />
+      <label>End date (optional)</label>
+      <input id="end" type="date" />
+    </div>
+    <div class="controls">
+      <label><input type="checkbox" id="save" /> Save to DB</label>
+      <button id="searchBtn">Search</button>
+      <button id="listBtn">List Saved Records</button>
+    </div>
+  </div>
+
+  <div id="output"></div>
+
+  <script>
+    document.getElementById("infoBtn").addEventListener("click", () => {
+      window.open("https://www.linkedin.com/school/pmaccelerator/","_blank");
+    });
+
+    document.getElementById("useLoc").addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        alert("Geolocation not supported by your browser.");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition((pos) => {
+        const lat = pos.coords.latitude.toFixed(6);
+        const lon = pos.coords.longitude.toFixed(6);
+        document.getElementById("loc").value = `${lat},${lon}`;
+      }, (err) => {
+        alert("Could not get location: " + err.message);
+      });
+    });
+
+    document.getElementById("listBtn").addEventListener("click", async () => {
+      const outDiv = document.getElementById("output");
+      outDiv.innerHTML = "Loading saved records...";
+      try {
+        const r = await fetch("/api/records");
+        const data = await r.json();
+        if(!data.records || data.records.length===0){ outDiv.innerHTML = "<p>No records found.</p>"; return; }
+        let html = "<h3>Saved Records</h3><ul>";
+        data.records.forEach(rec => {
+          html += `<li><strong>${rec.location_name}</strong> (id:${rec.id}) — <button onclick="viewRecord(${rec.id})">View</button> <button onclick="downloadRec(${rec.id}, 'csv')">CSV</button> <button onclick="downloadRec(${rec.id}, 'xml')">XML</button> <button onclick="downloadRec(${rec.id}, 'pdf')">PDF</button> <button onclick="delRec(${rec.id})">Delete</button></li>`;
+        });
+        html += "</ul>";
+        outDiv.innerHTML = html;
+      } catch (e) {
+        outDiv.innerHTML = "Error: " + e.toString();
+      }
+    });
+
+    async function delRec(id){
+      if(!confirm("Delete record "+id+"?")) return;
+      const r = await fetch(`/api/records/${id}`,{method:"DELETE"});
+      if(r.ok){ alert("Deleted"); document.getElementById("listBtn").click(); } else { alert("Delete failed"); }
+    }
+
+    function downloadRec(id, format){
+      window.open(`/api/records/${id}/export?format=${format}`, "_blank");
+    }
+
+    async function viewRecord(id){
+      const outDiv = document.getElementById("output");
+      outDiv.innerHTML = "Loading...";
+      const r = await fetch(`/api/records/${id}`);
+      if(!r.ok){ outDiv.innerHTML = "Not found"; return; }
+      const data = await r.json();
+      renderSaved(data);
+    }
+
+    document.getElementById("searchBtn").addEventListener("click", async () => {
+      const q = document.getElementById("loc").value.trim();
+      if (!q) { alert("Enter a location"); return; }
+      const start = document.getElementById("start").value || null;
+      const end = document.getElementById("end").value || null;
+      const save = document.getElementById("save").checked;
+
+      const body = {
+        location: { query: q },
+        start_date: start,
+        end_date: end,
+        save: save
+      };
+
+      const outDiv = document.getElementById("output");
+      outDiv.innerHTML = "Loading...";
+
+      try {
+        const r = await fetch("/api/weather/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (!r.ok) {
+          const err = await r.json();
+          outDiv.innerHTML = `<pre style="color:red">${JSON.stringify(err, null, 2)}</pre>`;
+          return;
+        }
+        const data = await r.json();
+        renderResult(data);
+      } catch (e) {
+        outDiv.innerHTML = "Error: " + e.toString();
+      }
+    });
+
+    function weatherIconUrl(icon){
+      return `https://openweathermap.org/img/wn/${icon}@2x.png`;
+    }
+
+    function renderResult(data) {
+      const outDiv = document.getElementById("output");
+      const res = data.result;
+      const saved = data.saved_record_id ? `<p>Saved as record id: ${data.saved_record_id}</p>` : "";
+      const locHtml = `<h2>${res.location_name} (${res.lat}, ${res.lon})</h2>`;
+      const cur = res.current;
+      const icon = cur.weather && cur.weather[0] ? cur.weather[0].icon : null;
+      const curHtml = `<div><strong>Current:</strong> ${cur.weather?.map(w=>w.description).join(", ")} — ${cur.main.temp}°C ${icon ? '<img class="weather-icon" src="'+weatherIconUrl(icon)+'" alt="" />' : ''}</div>`;
+      let fHtml = "<div><strong>5-day forecast (sample):</strong><ul>";
+      (res.forecast.list || []).slice(0, 8).forEach(item => {
+        const dt = new Date(item.dt * 1000).toLocaleString();
+        fHtml += `<li>${dt} — ${item.weather.map(w=>w.description).join(", ")} — ${item.main.temp}°C</li>`;
+      });
+      fHtml += "</ul></div>";
+
+      const ytLink = `<p><a href="${res.youtube_search}" target="_blank">YouTube: Travel videos for ${res.location_name}</a></p>`;
+      const mapEmbed = `<div style="width:100%;height:300px">${res.google_maps_embed ? '<iframe src="'+res.google_maps_embed+'" style="width:100%;height:100%;"></iframe>' : ''}</div>`;
+
+      outDiv.innerHTML = `${saved}${locHtml}${curHtml}${fHtml}${ytLink}${mapEmbed}`;
+    }
+
+    function renderSaved(data){
+      const outDiv = document.getElementById("output");
+      const rec = data;
+      const w = rec.weather_data;
+      let html = `<h2>${rec.location_name} (id:${rec.id})</h2>`;
+      if(w && w.current){
+        const c = w.current;
+        const icon = c.weather && c.weather[0] ? c.weather[0].icon : null;
+        html += `<div><strong>Current:</strong> ${c.weather?.map(x=>x.description).join(", ")} — ${c.main?.temp}°C ${icon? '<img class="weather-icon" src="https://openweathermap.org/img/wn/'+icon+'@2x.png" />' : ''}</div>`;
+      }
+      if(w && w.historical){
+        html += `<h3>Historical (daily)</h3>`;
+        if(w.historical && w.historical.daily && w.historical.daily.time){
+          html += "<ul>";
+          const times = w.historical.daily.time;
+          const tmin = w.historical.daily.temperature_2m_min || [];
+          const tmax = w.historical.daily.temperature_2m_max || [];
+          const tmean = w.historical.daily.temperature_2m_mean || [];
+          for(let i=0;i<times.length;i++){
+            html += `<li>${times[i]} — min:${tmin[i] ?? 'N/A'}°C max:${tmax[i] ?? 'N/A'}°C mean:${tmean[i] ?? 'N/A'}°C</li>`;
+          }
+          html += "</ul>";
+        } else {
+          html += "<p>No historical data available.</p>";
+        }
+      }
+      html += `<p><button onclick="downloadRec(${rec.id}, 'json')">JSON</button> <button onclick="downloadRec(${rec.id}, 'csv')">CSV</button> <button onclick="downloadRec(${rec.id}, 'xml')">XML</button> <button onclick="downloadRec(${rec.id}, 'pdf')">PDF</button></p>`;
+      outDiv.innerHTML = html;
+    }
+  </script>
+
+  <hr>
+</body>
+</html>
